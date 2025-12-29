@@ -1,0 +1,5 @@
+cat.png
+/vosk-model-small-cn-0.22
+resize_image.py
+yolov8n.pt
+code_proposed.md
