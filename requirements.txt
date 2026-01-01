@@ -1,9 +1,9 @@
 opencv-python
-ultralytics
-torch
-torchvision
-sentence-transformers
+numpy
 sounddevice
 vosk
-numpy
-pyaudio
+sentence-transformers
+ultralytics
+customtkinter
+pillow
+pyinstaller
