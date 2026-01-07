@@ -3,3 +3,5 @@ cat.png
 resize_image.py
 yolov8n.pt
 code_proposed.md
+/build
+/dist

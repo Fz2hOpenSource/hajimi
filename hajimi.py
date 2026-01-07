@@ -17,7 +17,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 VOSK_MODEL_PATH = os.path.join(BASE_DIR, "vosk-model-small-cn-0.22")
 # 尝试查找当前目录下的 yolo11*.pt 文件，默认使用 s 版本
-YOLO_MODEL_NAME = os.path.join(BASE_DIR, "yolo11s.pt")
+YOLO_MODEL_NAME = os.path.join(BASE_DIR, "yolo11n.pt")
 EMBEDDING_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
 
 # 个人主页链接
@@ -47,14 +47,14 @@ FONT_PATH = get_font_path()
 def check_models():
     """检查必要的模型文件是否存在，不存在则打印下载链接"""
     missing = []
-    
+    global YOLO_MODEL_NAME
     # 1. 检查 YOLO 模型
     # 如果指定路径不存在，尝试搜寻同目录下的其他 pt 文件
     if not os.path.exists(YOLO_MODEL_NAME):
         found = False
         for f in os.listdir(BASE_DIR):
             if f.endswith(".pt") and "yolo" in f.lower():
-                global YOLO_MODEL_NAME
+
                 YOLO_MODEL_NAME = os.path.join(BASE_DIR, f)
                 found = True
                 print(f"[Info] 未找到 yolo11s.pt，自动使用: {f}")
@@ -69,13 +69,13 @@ def check_models():
     # 2. 检查 Vosk 模型
     # 检查 VOSK_MODEL_PATH 是否存在，且里面有 conf 文件夹
     # 也要兼容解压后多套一层的情况
+    global VOSK_MODEL_PATH
     valid_vosk = False
     if os.path.exists(VOSK_MODEL_PATH):
         if os.path.exists(os.path.join(VOSK_MODEL_PATH, "conf")):
             valid_vosk = True
         elif os.path.exists(os.path.join(VOSK_MODEL_PATH, os.path.basename(VOSK_MODEL_PATH), "conf")):
             # 修正路径
-            global VOSK_MODEL_PATH
             VOSK_MODEL_PATH = os.path.join(VOSK_MODEL_PATH, os.path.basename(VOSK_MODEL_PATH))
             valid_vosk = True
             
@@ -213,9 +213,10 @@ def voice_process_run(msg_queue, cache_items, vosk_path, embed_model_name):
         rec = vosk.KaldiRecognizer(vosk_model, samplerate)
         
         print("🎤 麦克风监听中...")
-        
+        devices = sd.query_devices()
+        print(devices)  
         # 使用 sounddevice 开启流
-        with sd.RawInputStream(samplerate=samplerate, blocksize=8000, device=None,
+        with sd.RawInputStream(samplerate=samplerate, blocksize=8000, device=2,
                                dtype='int16', channels=1, callback=audio_callback):
             while True:
                 data = q_audio.get()
@@ -235,22 +236,31 @@ def voice_process_run(msg_queue, cache_items, vosk_path, embed_model_name):
 # ================= 辅助绘图函数 =================
 
 def ensure_cat_image():
-    if not os.path.exists("hajimi.png"):
+    if not os.path.exists("hajimi1.png"):
         img = np.zeros((100, 100, 4), dtype=np.uint8)
         cv2.circle(img, (50, 50), 40, (0, 255, 255, 255), -1)
         cv2.circle(img, (35, 40), 5, (0, 0, 0, 255), -1)
         cv2.circle(img, (65, 40), 5, (0, 0, 0, 255), -1)
         cv2.ellipse(img, (50, 60), (10, 5), 0, 0, 180, (0, 0, 0, 255), 2)
-        cv2.imwrite("hajimi.png", img)
+        cv2.imwrite("hajimi1.png", img)
 
 def overlay_img(background, overlay, x, y):
     h, w = overlay.shape[:2]
     if x < 0 or y < 0 or x + w > background.shape[1] or y + h > background.shape[0]:
         return
+
+    # 如果没有 alpha 通道，直接覆盖
+    if overlay.shape[2] == 3:
+        background[y:y+h, x:x+w] = overlay
+        return
+
+    # 有 alpha 通道（BGRA）
     alpha = overlay[:, :, 3] / 255.0
-    for c in range(0, 3):
-        background[y:y+h, x:x+w, c] = (alpha * overlay[:, :, c] + 
-                                      (1 - alpha) * background[y:y+h, x:x+w, c])
+    for c in range(3):
+        background[y:y+h, x:x+w, c] = (
+            alpha * overlay[:, :, c] +
+            (1 - alpha) * background[y:y+h, x:x+w, c]
+        )
 
 def draw_text_chinese(img, text, position, textColor=(0, 255, 0), textSize=20):
     if (isinstance(img, np.ndarray)):  # 判断是否OpenCV图片类型
@@ -272,19 +282,29 @@ def draw_cat(frame, cat_img, target_box=None):
     """
     绘制哈基米。
     如果 target_box 不为 None，则画箭头指向目标。
-    否则仅在左下角显示哈基米。
+    否则仅在画面中间显示哈基米。
     """
     if cat_img is None: return
-    h, w, _ = frame.shape
-    cat_h, cat_w = cat_img.shape[:2]
     
-    # 固定位置：左下角
-    pos_x, pos_y = 20, h - cat_h - 20
-    overlay_img(frame, cat_img, pos_x, pos_y)
+    # 放大哈基米 (3倍大小)
+    scale = 1
+    new_w = int(cat_img.shape[1] * scale)
+    new_h = int(cat_img.shape[0] * scale)
+    cat_resized = cv2.resize(cat_img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    
+    h, w, _ = frame.shape
+    cat_h, cat_w = cat_resized.shape[:2]
+    
+    # 居中位置
+    pos_x = (w - cat_w) // 2
+    pos_y = (h - cat_h) // 2
+    
+    overlay_img(frame, cat_resized, pos_x, pos_y)
     
     if target_box is not None:
         x1, y1, x2, y2 = target_box
         cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
+        # 箭头从哈基米中心发出
         start_pt = (pos_x + cat_w // 2, pos_y + cat_h // 2)
         cv2.arrowedLine(frame, start_pt, (cx, cy), (0, 255, 0), 3, tipLength=0.1)
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
@@ -320,12 +340,18 @@ class HajimiApp(ctk.CTk):
         
         self.log_textbox = ctk.CTkTextbox(self.sidebar_frame, width=200)
         self.log_textbox.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
+
+        # --- 设置按钮 ---
+        self.settings_btn = ctk.CTkButton(self.sidebar_frame, text="⚙️ 设置模型路径", 
+                                          fg_color="transparent", border_width=1,
+                                          command=self.open_settings)
+        self.settings_btn.grid(row=3, column=0, padx=20, pady=10)
         
         # --- 底部：作者链接 ---
         self.link_label = ctk.CTkLabel(self.sidebar_frame, text="By Fz2hOpensource Team", 
                                        font=ctk.CTkFont(size=12, underline=True),
                                        text_color="lightblue", cursor="hand2")
-        self.link_label.grid(row=3, column=0, pady=20)
+        self.link_label.grid(row=4, column=0, pady=20)
         self.link_label.bind("<Button-1>", lambda e: webbrowser.open(USER_HOMEPAGE))
         
         # --- 右侧主区域 (视频流) ---
@@ -358,10 +384,67 @@ class HajimiApp(ctk.CTk):
         self.log_textbox.insert("end", message + "\n")
         self.log_textbox.see("end")
 
+    def open_settings(self):
+        """打开设置窗口"""
+        settings_window = ctk.CTkToplevel(self)
+        settings_window.title("系统设置")
+        settings_window.geometry("600x400")
+        settings_window.grab_set()  # 模态窗口
+
+        # 标题
+        ctk.CTkLabel(settings_window, text="模型路径设置", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=20)
+
+        # 表单容器
+        form_frame = ctk.CTkFrame(settings_window)
+        form_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        # 1. Vosk 路径
+        ctk.CTkLabel(form_frame, text="Vosk 语音模型路径 (文件夹):").grid(row=0, column=0, sticky="w", padx=10, pady=5)
+        vosk_entry = ctk.CTkEntry(form_frame, width=300)
+        vosk_entry.grid(row=1, column=0, padx=10, pady=5)
+        vosk_entry.insert(0, VOSK_MODEL_PATH)
+        
+        def browse_vosk():
+            path = filedialog.askdirectory(initialdir=BASE_DIR, title="选择 Vosk 模型文件夹")
+            if path:
+                vosk_entry.delete(0, "end")
+                vosk_entry.insert(0, path)
+        
+        ctk.CTkButton(form_frame, text="浏览", width=60, command=browse_vosk).grid(row=1, column=1, padx=10)
+
+        # 2. YOLO 路径
+        ctk.CTkLabel(form_frame, text="YOLO 模型路径 (.pt 文件):").grid(row=2, column=0, sticky="w", padx=10, pady=(20, 5))
+        yolo_entry = ctk.CTkEntry(form_frame, width=300)
+        yolo_entry.grid(row=3, column=0, padx=10, pady=5)
+        yolo_entry.insert(0, YOLO_MODEL_NAME)
+        
+        def browse_yolo():
+            path = filedialog.askopenfilename(initialdir=BASE_DIR, title="选择 YOLO 模型文件", filetypes=[("YOLO Model", "*.pt")])
+            if path:
+                yolo_entry.delete(0, "end")
+                yolo_entry.insert(0, path)
+        
+        ctk.CTkButton(form_frame, text="浏览", width=60, command=browse_yolo).grid(row=3, column=1, padx=10)
+
+        # 保存按钮
+        def save_and_close():
+            new_config = {
+                "vosk_path": vosk_entry.get(),
+                "yolo_path": yolo_entry.get()
+            }
+            save_config(new_config)
+            tk_msg = "配置已保存！\n请重启程序以生效。"
+            # 简单的弹窗提示 (这里用 label 模拟，或者 print)
+            print(tk_msg)
+            settings_window.destroy()
+            self.log("配置已更新，请重启程序。")
+
+        ctk.CTkButton(settings_window, text="保存设置", command=save_and_close, fg_color="green").pack(pady=20)
+
     def start_system(self):
         self.log("正在启动系统...")
         ensure_cat_image()
-        self.cat_img = cv2.imread("hajimi.png", cv2.IMREAD_UNCHANGED)
+        self.cat_img = cv2.imread("hajimi1.png", cv2.IMREAD_UNCHANGED)
         
         # 1. 启动子进程
         self.msg_queue = mp.Queue()
@@ -501,3 +584,11 @@ if __name__ == "__main__":
     app = HajimiApp()
     app.protocol("WM_DELETE_WINDOW", app.on_closing)
     app.mainloop()
+    
+
+    def on_closing(self):
+        if self.cap:
+            self.cap.release()
+        if self.process:
+            self.process.terminate()
+        self.destroy()
